@@ -1,0 +1,63 @@
+{
+  "GET /ping": [
+    {
+      "match": {},
+      "response": { "message": "pong!" },
+      "status": 200
+    }
+  ],
+  "GET /status.dust514.com/status": [
+    {
+      "match": {},
+      "response": {
+        "online": true,
+        "environment": "Tranquility",
+        "version": "1.0.0",
+        "message": "Server available"
+      },
+      "status": 200
+    }
+  ],
+  "GET /patch.dust514.com/version": [
+    {
+      "match": {},
+      "response": {
+        "version": "1.0.0",
+        "notes": "Dummy server response for testing"
+      },
+      "status": 200
+    }
+  ],
+  "GET /binaries.dust514.com/client": [
+    {
+      "match": {},
+      "response": {
+        "download": false,
+        "message": "No binary update required."
+      },
+      "status": 200
+    }
+  ],
+  "GET /cms.dust514.com/motd": [
+    {
+      "match": {},
+      "response": {
+        "motd": "Welcome back to New Eden, mercenary.",
+        "rotation": []
+      },
+      "status": 200
+    }
+  ],
+  "GET /DUST514/CLIENT-TEXT/EN-US/IMPORTANTMESSAGE.TXT.JSON": [
+    {
+      "match": {},
+      "response": {
+        "message": "Welcome back to Dust 514! This is a placeholder message."
+      },
+      "status": 200,
+      "headers": {
+        "Content-Type": "application/json"
+      }
+    }
+  ]
+}
