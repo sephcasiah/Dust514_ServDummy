@@ -1,129 +1,118 @@
+import os
 import json
 import threading
-import time
-from flask import Flask, request, jsonify, abort, Response
+from flask import Flask, request, jsonify, abort, make_response
 from functools import wraps
-import os
+from base64 import b64decode
 
 app = Flask(__name__)
+CONFIG_PATH = "responses.json"
+USERNAME = "admin"
+PASSWORD = "dust514"
+AUTH_HEADER = f"Basic {os.environ.get('AUTH', 'YWRtaW46ZHVzdDUxNA==')}"
+
 response_config = {}
-CONFIG_FILE = 'responses.json'
-USERNAME = 'admin'
-PASSWORD = 'dust514'
-CONFIG_LOCK = threading.Lock()
+config_lock = threading.Lock()
 
-# Basic Auth Decorator
-def check_auth(username, password):
-    return username == USERNAME and password == PASSWORD
 
-def authenticate():
-    return Response(
-        json.dumps({"error": "Authentication required."}),
-        401,
-        {'WWW-Authenticate': 'Basic realm="Dust514 Server Dummy"'}
-    )
+def load_config():
+    global response_config
+    if os.path.exists(CONFIG_PATH):
+        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+            try:
+                data = json.load(f)
+                with config_lock:
+                    response_config = data
+            except Exception as e:
+                print(f"[ERROR] Failed to load config: {e}")
+
+
+def save_config():
+    with config_lock:
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(response_config, f, indent=2)
+
 
 def requires_auth(f):
     @wraps(f)
     def decorated(*args, **kwargs):
-        auth = request.authorization
-        print(f"[DEBUG] Auth received: {auth}")  # Debug info
-        if not auth or not check_auth(auth.username, auth.password):
-            return authenticate()
+        auth = request.headers.get("Authorization", "")
+        print(f"[DEBUG] Auth received: {auth}")
+        if auth != AUTH_HEADER:
+            return make_response(jsonify({"error": "Authentication required."}), 401)
         return f(*args, **kwargs)
     return decorated
 
-# Load Config
-def load_config():
-    global response_config
-    if os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE, 'r') as f:
-            try:
-                response_config = json.load(f)
-            except json.JSONDecodeError:
-                print("[ERROR] Failed to parse responses.json")
-                response_config = {}
-    else:
-        response_config = {}
 
-# Save Config
-def save_config():
-    with open(CONFIG_FILE, 'w') as f:
-        json.dump(response_config, f, indent=2)
-
-# Match Incoming Requests
 def match_request(path, method, req):
-    if path in response_config and method in response_config[path]:
-        rules = response_config[path][method]
-        if not isinstance(rules, list):
-            print(f"[ERROR] Rules for {method} {path} are not a list.")
-            return jsonify({"error": "Invalid rule format"}), 500
+    rules = response_config.get(f"{method} {path}")
+    if not rules:
+        return make_response(jsonify({"error": "No matching rule"}), 404)
 
-        for rule in rules:
-            if not isinstance(rule, dict):
-                print(f"[WARN] Skipping malformed rule: {rule}")
-                continue
-            conditions = rule.get("match", {})
-            matched = True
-            for key, expected in conditions.items():
-                if request.args.get(key) != expected:
-                    matched = False
-                    break
-            if matched:
-                delay = rule.get("delay")
-                if delay:
-                    time.sleep(float(delay))
-                return jsonify(rule.get("response", {})), rule.get("status", 200)
-    return jsonify({"error": "No matching rule"}), 404
+    if not isinstance(rules, list):
+        print(f"[ERROR] Invalid rule format for {method} {path}")
+        return make_response(jsonify({"error": "Invalid rule format"}), 500)
 
-# Config Endpoint
-@app.route('/_config', methods=['POST'])
+    for rule in rules:
+        conditions = rule.get("match", {})
+        query_params = req.args.to_dict()
+        form_params = req.form.to_dict()
+        body_json = {}
+        try:
+            if req.is_json:
+                body_json = req.get_json()
+        except Exception:
+            pass
+
+        match_found = True
+        for k, v in conditions.items():
+            if query_params.get(k) != v and form_params.get(k) != v and body_json.get(k) != v:
+                match_found = False
+                break
+        if match_found:
+            delay = rule.get("delay", 0)
+            if delay:
+                import time
+                time.sleep(delay)
+            return jsonify(rule.get("response", {})), rule.get("status", 200)
+
+    return make_response(jsonify({"error": "No matching rule"}), 404)
+
+
+@app.route("/_config", methods=["POST"])
 @requires_auth
 def update_config():
     try:
-        data = request.get_json(force=True)
-        if not isinstance(data, dict):
-            raise ValueError("Config must be a JSON object")
-
-        # Validate format
-        for path, methods in data.items():
-            if not isinstance(methods, dict):
-                raise ValueError(f"Methods for path '{path}' must be a dictionary.")
-            for method, rules in methods.items():
-                if not isinstance(rules, list):
-                    raise ValueError(f"Rules for '{method} {path}' must be a list.")
-                for rule in rules:
-                    if not isinstance(rule, dict):
-                        raise ValueError(f"Each rule must be a dict (got {type(rule)}).")
-
-        with CONFIG_LOCK:
-            response_config.update(data)
-            save_config()
-        return jsonify({"status": "Configuration updated"}), 200
+        new_config = request.get_json()
+        if not isinstance(new_config, dict):
+            raise ValueError("Config must be a dictionary")
+        # Validate that each key maps to a list of rules
+        for k, v in new_config.items():
+            if not isinstance(v, list):
+                raise ValueError(f"Rules for '{k}' must be a list.")
+        with config_lock:
+            response_config.clear()
+            response_config.update(new_config)
+        save_config()
+        return jsonify({"status": "Configuration updated"})
     except Exception as e:
         print(f"[ERROR] Failed to update config: {e}")
-        return jsonify({"error": "Failed to update config"}), 400
+        return make_response(jsonify({"error": "Failed to update config"}), 400)
 
-# Shutdown Endpoint
-@app.route('/_shutdown', methods=['POST'])
+
+@app.route("/_shutdown", methods=["POST"])
 @requires_auth
 def shutdown():
-    shutdown_func = request.environ.get('werkzeug.server.shutdown')
-    if shutdown_func is None:
-        return jsonify({"error": "Shutdown not supported"}), 501
-    shutdown_func()
-    return jsonify({"status": "Server shutting down..."}), 200
+    return make_response(jsonify({"error": "Shutdown not supported"}), 501)
 
-# 📡 Catch-All Handler
-@app.route('/', defaults={'path': ''}, methods=['GET', 'POST'])
-@app.route('/<path:path>', methods=['GET', 'POST'])
+
+@app.route("/", defaults={"path": ""}, methods=["GET", "POST"])
+@app.route("/<path:path>", methods=["GET", "POST"])
 def handle_request(path):
     return match_request(f"/{path}", request.method, request)
 
-# Start Server
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     load_config()
-    try:
-        app.run(host='127.0.0.1', port=8000)
-    except KeyboardInterrupt:
-        print("Shutting down server...")
+    print("✅ Dust514_ServDummy running on port 80...")
+    app.run(host="0.0.0.0", port=80)
