@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: dust514-servdummy
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python dust514_servdummy_render.py
