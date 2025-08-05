@@ -53,7 +53,8 @@ if __name__ == "__main__":
     load_config()
     run_on_port(59224)
     run_on_port(59233)
-    run_on_port(8080)  # optional HTTP interface
+    run_on_port(443)  # optional HTTP interface
+    run_on_port(80)
     print("🟢 Dust514 Dummy Server running. Press Ctrl+C to stop.")
     try: input();  # keep running
     except KeyboardInterrupt: pass
